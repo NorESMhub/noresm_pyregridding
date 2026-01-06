@@ -190,14 +190,11 @@ def make_se_regridder(weight_file, regrid_method="conserved"):
 def regrid_se_data(regridder, data_to_regrid):
     if regridder is None:
         return data_to_regrid
-    print(data_to_regrid.dims)
     if isinstance(data_to_regrid, xr.DataArray):
         #print(type(data_to_regrid))
         updated = data_to_regrid.copy().transpose(..., "lndgrid").expand_dims("dummy", axis=-2)
     else:
-        vars_with_ncol = [name for name in data_to_regrid.variables if "ncol" in data_to_regrid[name].dims]
-        print(data_to_regrid[vars_with_ncol])
-        print(data_to_regrid[vars_with_ncol].dims)
+        vars_with_ncol = [name for name in list(data_to_regrid.data_vars.keys()) if "lndgrid" in data_to_regrid[name].dims]
         updated = data_to_regrid.copy().update(
             data_to_regrid[vars_with_ncol].transpose(..., "lndgrid").expand_dims("dummy", axis=-2)
         )
