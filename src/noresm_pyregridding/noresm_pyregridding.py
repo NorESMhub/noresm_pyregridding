@@ -58,16 +58,16 @@ def make_se_regridder(weight_file, regrid_method="conserved"):
     )
     return regridder
 
-def regrid_se_data(regridder, data_to_regrid, dimname):
+def regrid_se_data(regridder, data_to_regrid, dimname, debug):
     if regridder is None:
         print (f"No data to regrid, returning")
         return data_to_regrid
-    print (f"dimname is {dimname}")
     data_copy = data_to_regrid.copy()
     vars_with_ncol = [name for name in list(data_to_regrid.data_vars.keys()) if dimname in data_to_regrid[name].dims]
     for var in vars_with_ncol:
         if "FATES_DAYSINCE_DROUGHTLEAFON_PF" not in var and "FATES_DAYSINCE_DROUGHTLEAFOFF_PF" not in var:
-            print (f"var is {var}")
+            if debug:
+                print (f"var is {var}")
             data_copy[var] = data_copy[var].transpose(..., dimname).expand_dims("dummy", axis=-2)
     regridded = regridder(data_copy.rename({"dummy": "lat", dimname: "lon"}))
     return regridded

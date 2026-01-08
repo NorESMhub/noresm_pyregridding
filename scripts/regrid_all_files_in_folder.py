@@ -39,7 +39,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Command-line wrapper to regridder from SE to lat/lon grid')
 
     parser.add_argument('--debug', action='store_true',
-                        help="Turn on debug output.")
+                        help="Turn on debug output (False by default).")
 
     parser.add_argument('--indir',
                         help="Full path to directory containing input spectral element data files (required)",
@@ -97,6 +97,7 @@ regridder = noresm_pyregridding.make_se_regridder(weight_file=weight_file)
 print (f"successfully called regridder")
 
 # For each file in list of files - regridd data
+debug = args.debug
 input_dir = args.indir
 output_dir = args.outdir
 filelist = glob.glob(f"{input_dir}*.nc")
@@ -107,7 +108,7 @@ for filepath in filelist:
     data = xr.open_dataset(filepath)
     dimname = args.indim
     print (f" using dimname of {dimname}")
-    data_regridded = noresm_pyregridding.regrid_se_data(regridder, data, dimname)
+    data_regridded = noresm_pyregridding.regrid_se_data(regridder, data, dimname, debug)
     print(f"Successfully regridded file {filepath}")
 
     # Write  out regridded file
