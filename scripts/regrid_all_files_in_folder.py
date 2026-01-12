@@ -49,9 +49,9 @@ def parse_arguments():
                         help="Full path to directory where output regridded data will be placed (required)",
                         required=True)
 
-    parser.add_argument ('--indim',
-                         choices=("lndgrid","ncol"),
-                         help="dimension name to regrid on input files (required)",
+    parser.add_argument ('--component',
+                         choices=("cam","ctsm"),
+                         help="component name to regrid on input files (required)",
                          required=True)
 
     parser.add_argument ('--ingrid',
@@ -83,6 +83,16 @@ args = parse_arguments()
 # TODO: the following is only for area average - need to introduce more generality for bilinear mapping for
 # intensive variables 
 
+# Determine dimname
+component = args.component
+if component == "cam":
+    dimname = "ncol"
+else:
+    dimname = "lndgrid"
+
+print (f"dimname is {dimname}")
+print (f"component is {component}")
+
 # Determine weights file to use for regridding
 if (args.ingrid == 'ne16'):
     weight_file = "/datalake/NS9560K/diagnostics/land_xesmf_diag_data/map_ne16pg3_to_1.9x2.5_nomask_scripgrids_c250425.nc"
@@ -96,7 +106,7 @@ print (f"Creating regridder for conservative maping")
 regridder = noresm_pyregridding.make_se_regridder(weight_file=weight_file)
 print (f"successfully called regridder")
 
-# For each file in list of files - regridd data
+# For each file in list of files - regrid data
 debug = args.debug
 input_dir = args.indir
 output_dir = args.outdir
@@ -106,9 +116,10 @@ for filepath in filelist:
     # Regrid file
     print(f"Regridding file {filepath}")
     data = xr.open_dataset(filepath)
-    dimname = args.indim
-    print (f" using dimname of {dimname}")
-    data_regridded = noresm_pyregridding.regrid_se_data(regridder, data, dimname, debug)
+    if component == 'cam':
+        data_regridded = noresm_pyregridding.regrid_cam_se_data(regridder, data, debug)
+    elif component == 'ctsm':
+        data_regridded = noresm_pyregridding.regrid_ctsm_se_data(regridder, data, debug)
     print(f"Successfully regridded file {filepath}")
 
     # Write  out regridded file

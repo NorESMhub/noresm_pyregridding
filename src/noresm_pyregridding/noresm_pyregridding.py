@@ -3,8 +3,11 @@ import xarray as xr
 import math
 import xesmf
 
+
 def make_regridder_regular_to_coarsest_resolution(regrid_target1, regrid_target2):
-    if (regrid_target2.lat.shape[0] == regrid_target1.lat.shape[0]) and (regrid_target2.lon.shape[0] == regrid_target1.lon.shape[0]):
+    if (regrid_target2.lat.shape[0] == regrid_target1.lat.shape[0]) and (
+        regrid_target2.lon.shape[0] == regrid_target1.lon.shape[0]
+    ):
         return None, False
     if regrid_target1.lat.shape[0] > regrid_target2.lat.shape[0]:
         regridder_here = make_regular_grid_regridder(regrid_target1, regrid_target2)
@@ -13,20 +16,19 @@ def make_regridder_regular_to_coarsest_resolution(regrid_target1, regrid_target2
     return regridder_here, False
 
 
-def make_regular_grid_regridder(regrid_start, regrid_target, method= "bilinear"):
-    # print(regrid_start)
-    lat_min = np.argmin(np.abs((regrid_target["lat"].values - regrid_start["lat"].values.min())))
-    lat_max = np.argmin(np.abs(regrid_target["lat"].values - regrid_start["lat"].values.max()))
+def make_regular_grid_regridder(regrid_start, regrid_target, method="bilinear"):
+    lat_min = np.argmin(
+        np.abs((regrid_target["lat"].values - regrid_start["lat"].values.min()))
+    )
+    lat_max = np.argmin(
+        np.abs(regrid_target["lat"].values - regrid_start["lat"].values.max())
+    )
     regrid_target = regrid_target.isel(lat=slice(lat_min, lat_max))
-    # print(f"lat_min {lat_min}, lat_max: {lat_max}")# lon_min: {lon_min}, lon_max: {lon_max}")
-
-    # print(regrid_target)
     return xesmf.Regridder(
         regrid_start,
         regrid_target,
-        method = method,
-        periodic = True,
-        #reuse_weights=True
+        method=method,
+        periodic=True,
     )
 
 
@@ -36,7 +38,7 @@ def make_generic_regridder(weightfile, filename_exmp):
         return None
     else:
         return make_se_regridder(weight_file=weightfile)
-   
+
 
 def make_se_regridder(weight_file, regrid_method="conserved"):
     weights = xr.open_dataset(weight_file)
@@ -49,14 +51,12 @@ def make_se_regridder(weight_file, regrid_method="conserved"):
     # output variable shape
     out_shape = weights.dst_grid_dims.load().data.tolist()[::-1]
 
-    # print(in_shape, out_shape)
-
     # Some prep to get the bounds:
     # Note that bounds are needed for conservative regridding and not for bilinear
-    lat_b_out = np.zeros(out_shape[0]+1)
-    lon_b_out = weights.xv_b.data[:out_shape[1]+1, 0]
-    lat_b_out[:-1] = weights.yv_b.data[np.arange(out_shape[0])*out_shape[1],0]
-    lat_b_out[-1] = weights.yv_b.data[-1,-1]
+    lat_b_out = np.zeros(out_shape[0] + 1)
+    lon_b_out = weights.xv_b.data[: out_shape[1] + 1, 0]
+    lat_b_out[:-1] = weights.yv_b.data[np.arange(out_shape[0]) * out_shape[1], 0]
+    lat_b_out[-1] = weights.yv_b.data[-1, -1]
 
     dummy_in = xr.Dataset(
         {
@@ -86,58 +86,93 @@ def make_se_regridder(weight_file, regrid_method="conserved"):
     return regridder
 
 
-def regrid_se_data(regridder: xesmf.Regridder, ds_in: xr.Dataset, dimname: str, debug: bool) -> xr.Dataset:
+def regrid_ctsm_se_data(
+    regridder: xesmf.Regridder, ds_in: xr.Dataset, debug: bool
+) -> xr.Dataset:
+
     if regridder is None:
-        print (f"No data to regrid, returning")
+        print(f"No data to regrid, returning")
         return ds_in
+
+    dimname = "lndgrid"
 
     # make a copy of input dataset
     ds_in_copy = ds_in.copy()
 
     # determine variables that will be regridded
-    #vars_with_ncol = [name for name in list(ds_in.data_vars.keys()) if dimname in ds_in[name].dims]
-    vars_with_ncol = [name for name in ds_in.data_vars if dimname in ds_in[name].dims]
+    vars_to_regrid = [name for name in ds_in.data_vars if dimname in ds_in[name].dims]
 
     # For land variables - need to multiple variables by landfrac before regridding and then
     # divide by the mapped landfrac after regridding
-    if dimname == 'lndgrid':
-        # remove variables from those to be regridded
-        exclude_regridding_vars = ["FATES_DAYSINCE_DROUGHTLEAFON_PF","FATES_DAYSINCE_DROUGHTLEAFOFF_PF"]
-        for var in exclude_regridding_vars:
-            if var in vars_with_ncol:
-                vars_with_ncol.remove(var) 
-                print (f"removed var {var} from list to regrid")
-            
-        # determine list of variables that will not be normalized
-        exclude_normalization_vars = ["landfrac","landmask"]
 
-        # normalize input field by landfrac
-        landfrac = ds_in["landfrac"].fillna(0)
-        for var in vars_with_ncol:
-            if debug:
-                print (f"var is {var}")
-            ds_in_copy[var] = ds_in_copy[var].transpose(..., dimname).expand_dims("dummy", axis=-2)
-            if var not in exclude_normalization_vars:
-                print (f"var is {var}")
-                ds_in_copy[var] = ds_in_copy[var] * ds_in_copy["landfrac"]
+    # remove variables from those to be regridded
+    exclude_regridding_vars = [
+        "FATES_DAYSINCE_DROUGHTLEAFON_PF",
+        "FATES_DAYSINCE_DROUGHTLEAFOFF_PF",
+    ]
+    for var in exclude_regridding_vars:
+        if var in vars_to_regrid:
+            vars_to_regrid.remove(var)
+            print(f"removed var {var} from list to regrid")
 
-        # regrid data
-        ds_out = regridder(ds_in_copy.rename({"dummy": "lat", dimname: "lon"}))
+    # determine list of variables that will not be normalized
+    exclude_normalization_vars = ["landfrac", "landmask"]
 
-        # normalize the mapped land data by dividing by the mapped land fraction
-        for var in vars_with_ncol:
-            if var not in exclude_normalization_vars:
-                ds_out[var] = ds_out[var] / ds_out["landfrac"]
+    # normalize input vars by landfrac and also multiply FATES specific variable by FATES_FRACTION
+    landfrac = ds_in["landfrac"].fillna(0)
+    for var in vars_to_regrid:
+        if debug:
+            print(f"var is {var}")
+        ds_in_copy[var] = (
+            ds_in_copy[var].transpose(..., dimname).expand_dims("dummy", axis=-2)
+        )
+        if var not in exclude_normalization_vars:
+            print(f"var is {var}")
 
-    else: # for atm
-        for var in vars_with_ncol:
-            if debug:
-                print (f"var is {var}")
-            ds_in_copy[var] = ds_in_copy[var].transpose(..., dimname).expand_dims("dummy", axis=-2)
+            # multiply variable by landfrac
+            ds_in_copy[var] = ds_in_copy[var] * ds_in_copy["landfrac"]
 
-        # regrid the field
-        ds_out = regridder(ds_in_copy.rename({"dummy": "lat", dimname: "lon"}))
+            # if variable is a FATES variable, multiply  by FATES_FRACTION
+            if var.startswith("FATES") and var != "FATES_FRACTION":
+                ds_in_copy[var] = ds_in_copy[var] * ds_in_copy["FATES_FRACTION"]
 
+    # regrid data
+    ds_out = regridder(ds_in_copy.rename({"dummy": "lat", dimname: "lon"}))
+
+    # normalize the mapped land data by dividing by the mapped land fraction
+    for var in vars_to_regrid:
+        if var not in exclude_normalization_vars:
+            ds_out[var] = ds_out[var] / ds_out["landfrac"]
+
+    # return regridded dataset
     return ds_out
 
 
+def regrid_cam_se_data(
+    regridder: xesmf.Regridder, ds_in: xr.Dataset, debug: bool
+) -> xr.Dataset:
+
+    if regridder is None:
+        print(f"No data to regrid, returning")
+        return ds_in
+
+    dimname = "ncol"
+
+    # make a copy of input dataset
+    ds_in_copy = ds_in.copy()
+
+    # determine variables that will be regridded
+    vars_to_regrid = [name for name in ds_in.data_vars if dimname in ds_in[name].dims]
+
+    for var in vars_to_regrid:
+        if debug:
+            print(f"var is {var}")
+        ds_in_copy[var] = (
+            ds_in_copy[var].transpose(..., dimname).expand_dims("dummy", axis=-2)
+        )
+
+    # regrid all the variables
+    ds_out = regridder(ds_in_copy.rename({"dummy": "lat", dimname: "lon"}))
+
+    # return regridded dataset
+    return ds_out
