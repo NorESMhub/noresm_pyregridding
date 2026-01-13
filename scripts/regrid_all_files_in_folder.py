@@ -113,6 +113,13 @@ output_dir = args.outdir
 filelist = glob.glob(f"{input_dir}*.nc")
 for filepath in filelist:
 
+    # Find filename and output filename and check if file has already been regridded
+    filename = filepath.split("/")[-1]
+    output_file = os.path.join(output_dir, filename.replace(".nc", "_regridded.nc"))
+    if os.path.exists(output_file):
+        print(f"Output file {output_file} already exists - skipping regridding for file {filepath}")
+        continue
+
     # Regrid file
     print(f"Regridding file {filepath}")
     data = xr.open_dataset(filepath)
@@ -123,8 +130,6 @@ for filepath in filelist:
     print(f"Successfully regridded file {filepath}")
 
     # Write  out regridded file
-    filename = filepath.split("/")[-1]
-    output_file = os.path.join(output_dir, filename.replace(".nc", "_regridded.nc"))
     data_regridded.to_netcdf(output_file)
     print(f"Wrote regridded file {output_file}")
     sys.exit(4)
