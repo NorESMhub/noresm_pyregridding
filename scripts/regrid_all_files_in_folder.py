@@ -89,6 +89,9 @@ def main():
     # Parse command-line arguments
     args = parse_arguments()
 
+    # Save debug state for ease of use
+    debug = args.debug
+
     # Set up logging
     if args.debug:
         logging.basicConfig(
@@ -99,6 +102,21 @@ def main():
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     logger = logging.getLogger("noresm_pyregridding")
+    
+    # Determine input directory
+    inputdir = Path(args.inputdir)
+
+    # Check that inputdir exists
+    if not os.path.exists(inputdir):
+        raise ValueError(f"inputdir {inputdir} does not exist")
+    
+    # Determine output directories and setup if it does not exist
+    outputdir = Path(args.outputdir)
+    if not os.path.exists(outputdir):
+        try:
+            outputdir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise ValueError(f"Could not create output directory {outputdir}, error: {e}")
 
     # Set up dask if appropriate
     if args.workers == 1:
@@ -128,20 +146,6 @@ def main():
     regridder = noresm_pyregridding.make_se_regridder(weight_file=weight_file)
     logger.info(f"successfully called regridder")
 
-    # For each file in list of files - regrid data
-    debug = args.debug
-
-    # Determine input directory
-    inputdir = Path(args.inputdir)
-
-    # Determine output directories
-    outputdir = Path(args.outputdir)
-    if not os.path.exists(outputdir):
-        outputdir.mkdir(parents=True, exist_ok=True)
-
-    # Check that inputdir exists
-    if not os.path.exists(inputdir):
-        raise ValueError(f"inputdir {inputdir} does not exist")
 
     # Determine list of files to regrid
     filelist = glob.glob(f"{inputdir}/*.nc")
