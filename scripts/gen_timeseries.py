@@ -58,25 +58,18 @@ def parse_arguments():
                         required=True
                         )
     parser.add_argument('--outputdir', type=str,
-                        help="Full path to directory where output time series data will be placed (optional) \n"
-                        "if not specified will be put in inputdir/../time_series)",
+                        help="Full path to directory where output time series data will be placed (optional) "
+                        "(default: inputdir/../time_series)",
                         )
     parser.add_argument("--overwrite_timeseries",
                         action="store_true",
                         help="Overwrite existing timeseries outputs (default: False)",
                         )
-    parser.add_argument("--year_first",
-                        type=int,
-                        help="first year of history files to use",
-                        ),
-    parser.add_argument("--year_last",
-                        type=int,
-                        help="last year of history files to use",
-                        ),
-    parser.add_argument("--year_inc",
-                        type=int,
-                        help="how many years to use for each time series file",
-                        ),
+    parser.add_argument("--years-spec",
+                        help='colon separated specification of years to process \n'
+                        ' in format of year-first,year-last,year-increments \n '
+                        ' where year-increments specifies how many years to user for each time series file \n'
+                        ' (default: all files in inputdir are placed in one time series file)')
     parser.add_argument("--workers",
                         type=int,
                         default=1,
@@ -115,7 +108,7 @@ def main():
         cluster = None
     else:
         cluster = LocalCluster(
-            n_workers=args.workers, threads_per_worker=1, memory_limit="4GB",
+            n_workers=args.workers, threads_per_worker=1, memory_limit="8GB",
         )
         client = cluster.get_client()
 
@@ -151,44 +144,64 @@ def main():
         logger.warning(f"No input files to process in {inputdir} with {include_patterns}")
         sys.exit(0)
 
-    year_first = args.year_first
-    year_last = args.year_last
-    nstep = args.year_inc
+    # Determine how time series will be created
+    if not args.years_spec:
 
-    # Create base HFCollection
-    hf_collection = HFCollection(inputdir, dask_client=client)
+        logger.info("Starting ts_collection")
 
-    for include_pattern in include_patterns:
-        logger.info("Processing files with pattern: %s", include_pattern)
+        # Create base HFCollection
+        hf_collection = HFCollection(inputdir, dask_client=client)
+        hf_collection = hf_collection.include_patterns([include_pattern])
+        hf_collection.pull_metadata()
+        
+        # Create base TSCollection
+        ts_collection = TSCollection(hf_collection, outputdir)
+        ts_collection = ts_collection.apply_overwrite("*")
+        ts_collection.execute()
+        logger.info("Finished ts_collection")
 
-        for year in range(year_first, year_last+1, nstep):
-            logger.info(f"Processing from year {year} to year {year+nstep-1}")
-            hfp_collection = hf_collection.include_patterns([include_pattern])
-            hfp_collection = hfp_collection.include_years(year, year+nstep-1)
+    else:
 
-            logger.info(f"files to process for year {year} are") 
-            for item in list(hfp_collection):
-                logger.info(f"{item}")
+        years = args.years_spec.split(':')
+        year_first = int(years[0])
+        year_last = int(years[1])
+        nyears = int(years[2])
+        logger.info("First year to use is %s",year_first)
+        logger.info("Last year to use is %s",year_last)
+        logger.info("Year increment for time series generation is %s",nyears)
 
-            # Reads metadata from all files matching this pattern
-            # Gets variable names, dimensions, time information, etc.
-            hfp_collection.pull_metadata()
+        hf_collection = HFCollection(inputdir, dask_client=client)
+        for include_pattern in include_patterns:
+            logger.info("Processing files with pattern: %s", include_pattern)
 
-            # Set up the time series generation for this pattern's files
-            logger.info("Calling ts_collection")
-            ts_collection = TSCollection(
-                hfp_collection, outputdir, ts_orders=None, dask_client=client
-            )
-            logger.info("Finished ts_collection")
+            for year in range(year_first, year_last+1, nyears):
+                logger.info(f"Processing from year {year} to year {year+nyears-1}")
+                hfp_collection = hf_collection.include_patterns([include_pattern])
+                hfp_collection = hfp_collection.include_years(year, year+nyears-1)
 
-            # Apply overwrite if requested:
-            # If --overwrite flag was passed, tells GenTS to overwrite existing time series files
-            if args.overwrite_timeseries:
-                ts_collection = ts_collection.apply_overwrite("*")
+                logger.info(f"files to process for year {year} are") 
+                for item in list(hfp_collection):
+                    logger.info(f"{item}")
 
-            # Perform the time series generation for this pattern
-            ts_collection.execute()
-            logger.info("Timeseries processing complete")
+                # Reads metadata from all files matching this pattern
+                # Gets variable names, dimensions, time information, etc.
+                hfp_collection.pull_metadata()
+
+                # Set up the time series generation for this pattern's files
+                logger.info("Calling ts_collection")
+                ts_collection = TSCollection(
+                    hfp_collection, outputdir, ts_orders=None, dask_client=client
+                )
+                logger.info("Finished ts_collection")
+
+                # Apply overwrite if requested:
+                # If --overwrite flag was passed, tells GenTS to overwrite existing time series files
+                if args.overwrite_timeseries:
+                    ts_collection = ts_collection.apply_overwrite("*")
+
+                # Perform the time series generation for this pattern
+                ts_collection.execute()
+                logger.info("Timeseries processing complete")
 
     if client:
         client.close()
