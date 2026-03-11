@@ -121,11 +121,9 @@ def analyse_expression(expr: str) -> dict:
     expr = expr.strip()
 
     if not is_math_expression(expr):
-        single_var = {}
-        single_var["model_var"] = expr
         return {
             "is_math": False,
-            "variables": single_var   # single variable is the expression itself
+            "variables": ["model_var:" + expr]     # single variable is the expression itself
         }
     return {
         "is_math": True,
@@ -205,7 +203,8 @@ def read_csv(filepath):
 def write_yaml(data, filepath):
     """Write dictionary to a YAML file."""
     with open(filepath, "w") as f:
-        yaml.dump(data, f, Dumper=InlineListDumper, default_flow_style=False)
+        #yaml.dump(data, f, Dumper=InlineListDumper, default_flow_style=False)
+        yaml.dump(data, f, default_flow_style=False)
 
 
 # ── main ───────────────────────────────────────────────────
