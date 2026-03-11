@@ -177,6 +177,13 @@ def read_csv(filepath):
                         entry["units"] = value
                     elif "Dimensions" in col:
                         entry["dim"] = value.split(',')
+                        if "lev" in value:
+                            levels = {}
+                            levels["name"] = "standard_hybrid_sigma"
+                            levels["units"] = "1"
+                            levels["src_axis_name"] = "lev"
+                            levels["src_axis_bnds"] = "ilev"
+                            entry["levels"] = levels
                     elif "NorESM3 name (dependency)" in col:
                         result = analyse_expression(value)
                         if result["is_math"]:
