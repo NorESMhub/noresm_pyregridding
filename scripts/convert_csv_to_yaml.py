@@ -36,6 +36,8 @@ def should_keep(row):
             keep_row = False
         if "n/a" in row["NorESM3 name (dependency)"]: 
             keep_row = False
+        if "derived" in row["NorESM3 name (dependency)"]: 
+            keep_row = False
         if "IN SURF DATASET" in row["NorESM3 name (dependency)"]:
             keep_row = False
     return keep_row
@@ -224,7 +226,19 @@ def read_csv(filepath):
             name = row["Branded Variable Name"].strip()
             data[name] = entry
 
-    return data
+    data_w_top = add_top_level_enteries(data)
+    return data_w_top
+
+def add_top_level_enteries(data):
+    """Add top-level entries to the data dictionary."""
+    data_w_top = {"dataset_overrides":
+                  {"institution_id": "NCC",
+                   "source_id": "NorESM3",
+                   "nominal_resolution": "200 km",
+                   "cheating_hidden_to_take_out": [1,2,3]
+                   }}
+    data_w_top["variables"] = data
+    return data_w_top
 
 
 # ── write yaml ─────────────────────────────────────────────
@@ -239,8 +253,10 @@ def write_yaml(data, filepath):
     for line in lines:
         if "{model_var:" in line:
             line = line.replace("{model_var:", "model_var: ").replace("}", "")
+        if "cheating_hidden_to_take_out" in line:
+            continue
         modified_lines.append(line)
-        if "units:" in line:
+        if "units:" in line or "source_id: NorESM3" in line:
             modified_lines.append("\n")
     with open(filepath, "w") as f:
         f.writelines(modified_lines)
