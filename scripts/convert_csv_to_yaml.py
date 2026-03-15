@@ -1,6 +1,7 @@
 import csv
 import yaml
 import re
+import sys
 
 # ── configuration ──────────────────────────────────────────
 INPUT_CSV  = "data.csv"
@@ -35,6 +36,8 @@ def should_keep(row):
             keep_row = False
         if "n/a" in row["NorESM3 name (dependency)"]: 
             keep_row = False
+        if "derived" in row["NorESM3 name (dependency)"]: 
+            keep_row = False
         if "IN SURF DATASET" in row["NorESM3 name (dependency)"]:
             keep_row = False
     return keep_row
@@ -57,13 +60,14 @@ def is_math_expression(expr: str) -> bool:
     False
     """
     expr = expr.strip()
-
     if re.search(r'[+\-*/^%]', expr):
         return True
     if re.search(r'\w+\s*\(', expr):
         return True
-    if re.search(r'\d', expr):
-        return True
+    # Commenting out, this is definitely classifying to much as expressions,
+    # not sure if we are missing somethng, though...
+    # if re.search(r'\d', expr):
+    #     return True
     if re.search(r'\w+\s+\w+', expr):
         return True
 
@@ -99,12 +103,11 @@ def extract_variables(expr: str) -> list:
 
     # filter out ignored words and pure numbers
     variables = []
-    word_dict = {}
     for word in all_words:
+        word_dict = {}
         if word not in ignore:
             word_dict["model_var"] = word
             variables.append(word_dict)
-
     return variables
 
 
@@ -123,7 +126,7 @@ def analyse_expression(expr: str) -> dict:
     if not is_math_expression(expr):
         return {
             "is_math": False,
-            "variables": ["model_var:" + expr]     # single variable is the expression itself
+            "variables": [{"model_var": expr}]     # single variable is the expression itself
         }
     return {
         "is_math": True,
@@ -141,7 +144,32 @@ def strip_quotes(obj):
         return obj.strip("'\"")
     return obj
 
+def fix_number_norwegian_format(value):
+    """Convert a string with Norwegian number format to a float."""
+    if isinstance(value, str):
+        value = value.replace('.', '').replace(',', '.')
+    if isinstance(value, str):
+        value = value.replace("\u2212", '-')  # replace unicode minus sign with regular hyphen
+    return value
 
+def clean_string(value):
+    """Clean a string by stripping whitespace and removing newlines."""
+    if isinstance(value, str):
+        value = value.replace("\'", "").replace('\"', "")  # remove quotes
+        value = value.strip()
+    if value == "longitude":
+        value = "lon"
+    elif value == "latitude":
+        value = "lat"
+    return value
+
+def clean_strings(values):
+    """Clean a list of strings."""
+    if isinstance(values, list):
+        return [clean_string(v) for v in values]
+    elif isinstance(values, str):
+        return clean_string(values)
+    return values
 # ── read csv ───────────────────────────────────────────────
 def read_csv(filepath):
     """Read CSV and return filtered rows as a dictionary."""
@@ -172,9 +200,9 @@ def read_csv(filepath):
                     elif "Description" in col:
                         entry["description"] = value
                     elif "Units (from Physical Parameter)" in col:
-                        entry["units"] = value
+                        entry["units"] = fix_number_norwegian_format(value)
                     elif "Dimensions" in col:
-                        entry["dim"] = value.split(',')
+                        entry["dims"] = clean_strings(value.split(','))
                         if "lev" in value:
                             levels = {}
                             levels["name"] = "standard_hybrid_sigma"
@@ -184,6 +212,8 @@ def read_csv(filepath):
                             entry["levels"] = levels
                     elif "NorESM3 name (dependency)" in col:
                         result = analyse_expression(value)
+                        if value == "can be derived":
+                            continue
                         if result["is_math"]:
                             entry["formula"] = value
                             entry["sources"] = result["variables"]
@@ -196,7 +226,19 @@ def read_csv(filepath):
             name = row["Branded Variable Name"].strip()
             data[name] = entry
 
-    return data
+    data_w_top = add_top_level_enteries(data)
+    return data_w_top
+
+def add_top_level_enteries(data):
+    """Add top-level entries to the data dictionary."""
+    data_w_top = {"dataset_overrides":
+                  {"institution_id": "NCC",
+                   "source_id": "NorESM3",
+                   "nominal_resolution": "200 km",
+                   "cheating_hidden_to_take_out": [1,2,3]
+                   }}
+    data_w_top["variables"] = data
+    return data_w_top
 
 
 # ── write yaml ─────────────────────────────────────────────
@@ -204,9 +246,20 @@ def write_yaml(data, filepath):
     """Write dictionary to a YAML file."""
     with open(filepath, "w") as f:
         #yaml.dump(data, f, Dumper=InlineListDumper, default_flow_style=False)
-        yaml.dump(data, f, default_flow_style=False)
-
-
+        yaml.dump(data, f, default_flow_style=None)
+    with open(filepath, "r") as f:
+        lines = f.readlines()
+    modified_lines = []
+    for line in lines:
+        if "{model_var:" in line:
+            line = line.replace("{model_var:", "model_var: ").replace("}", "")
+        if "cheating_hidden_to_take_out" in line:
+            continue
+        modified_lines.append(line)
+        if "units:" in line or "source_id: NorESM3" in line:
+            modified_lines.append("\n")
+    with open(filepath, "w") as f:
+        f.writelines(modified_lines)
 # ── main ───────────────────────────────────────────────────
 if __name__ == "__main__":
     InlineListDumper.add_representer(list, inline_list_representer)
