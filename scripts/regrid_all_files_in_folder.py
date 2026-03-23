@@ -33,6 +33,8 @@ from dask.distributed import LocalCluster
 from dask.distributed import wait, as_completed
 from dask import delayed
 
+include_patterns = ["cam.h0a","clm2.h0a"]
+
 #++++++++++++++++++++++++++++++
 # Input argument parser function
 #++++++++++++++++++++++++++++++
@@ -148,7 +150,8 @@ def main():
 
 
     # Determine list of files to regrid
-    filelist = glob.glob(f"{inputdir}/*.nc")
+    filelist = sorted({f for pattern in include_patterns for f in glob.glob(f"{inputdir}/*{pattern}*.nc")})
+    logger.info(f"input filelist is {filelist}")
     if len(filelist) < 1:
         logger.error(f"No netcdf files found in {inputdir}")
         logger.debug(f"filelist is {filelist}")
