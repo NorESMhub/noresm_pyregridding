@@ -1,34 +1,35 @@
-#!/usr/bin/env bash
-# -------------------------------------------------
-# parallel_nccopy.sh
-# Convert every *${include_pattern}*.nc in INPUT_DIR to NetCDF4‑Classic
-# and write the result to OUTPUT_DIR
-# -------------------------------------------------
+#!/bin/bash
 
-set -euo pipefail
+# Usage: ./convert_nc4_classic.sh <input_dir> <output_dir> <num_workers>
+# Example: ./convert_nc4_classic.sh /path/to/input /path/to/output 8
 
-if [[ $# -ne 3 ]]; then
-    echo "Usage: $0 <input_dir> <output_dir> <include_pattern>"
-    echo "include_pattern can be of the form clm2.h0a, cam.h0a, etc"
-    exit 1
-fi
-
-INPUT_DIR=$(realpath "$1")
-OUTPUT_DIR=$(realpath "$2")
-include_pattern=$3
+INPUT_DIR=${1:?Usage: $0 input_dir output_dir num_workers}
+OUTPUT_DIR=${2:?Usage: $0 input_dir output_dir num_workers}
+NUM_WORKERS=${3:-4}
 
 mkdir -p "$OUTPUT_DIR"
 
-# How many jobs to run at once?  Use the number of CPU cores,
-# or set it manually (e.g., -j 12).
-NUM_JOBS=12
+convert_file() {
+    input_file="$1"
+    output_dir="$2"
+    filename=$(basename "$input_file")
+    output_file="$output_dir/$filename"
 
-# Export variables for the subshell that parallel spawns
-export OUTPUT_DIR
+    if [ -f "$output_file" ]; then
+        echo "Skipping $filename - already exists"
+        return
+    fi
 
-parallel -j "$NUM_JOBS" --bar \
-    nccopy -k netCDF4_classic \
-    "{}" "${OUTPUT_DIR}/{/.}.nc" \
-    ::: "$INPUT_DIR"/*${include_pattern}*.nc
+    echo "Converting $filename"
+    ncks -7 "$input_file" "$output_file"
+    if [ $? -eq 0 ]; then
+        echo "Done: $filename"
+    else
+        echo "ERROR: failed to convert $filename"
+    fi
+}
 
-echo "All files converted → $OUTPUT_DIR"
+export -f convert_file
+
+find "$INPUT_DIR" -name "*h0a*.nc" | \
+    parallel -j "$NUM_WORKERS" convert_file {} "$OUTPUT_DIR"
