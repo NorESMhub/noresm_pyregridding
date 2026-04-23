@@ -2,7 +2,7 @@
 
 """
 script: regrid_all_files_in_folder
-regrids all cam or clm output files from spectral element grid to output lat/lon grid 
+regrids all cam or clm output files from spectral element grid to output lat/lon grid
 """
 
 #++++++++++++++++++++++++++++++
@@ -15,12 +15,11 @@ import sys
 import glob
 import argparse
 import xarray as xr
-import logging
+from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Determine local directory path:
 _LOCAL_PATH = os.path.dirname(os.path.abspath(__file__))
-
-from pathlib import Path
 
 # Append path to regridding utilities
 sys.path.append(os.path.join(_LOCAL_PATH, "../", "src"))
@@ -28,32 +27,25 @@ sys.path.append(os.path.join(_LOCAL_PATH, "../", "src"))
 # Now import regridding utilities
 from noresm_pyregridding import noresm_pyregridding
 
-# Dask
-from dask.distributed import LocalCluster
-from dask.distributed import wait, as_completed
-from dask import delayed
-
 #++++++++++++++++++++++++++++++
 # Input argument parser function
 #++++++++++++++++++++++++++++++
 
 def parse_arguments():
-
     """
     Parses command-line input arguments using the argparse
     python module and outputs the final argument object.
     """
 
-    #Create parser object:
     parser = argparse.ArgumentParser(description='Command-line wrapper to regridder from SE to lat/lon grid')
 
     parser.add_argument('--debug', action='store_true',
                         help="Turn on debug output (False by default).")
 
     parser.add_argument("--realm",
-                        choices=["atm","lnd"],
+                        choices=["atm", "lnd"],
                         help="Realm to process (required)",
-                        required=True,)
+                        required=True)
 
     parser.add_argument('--inputdir', type=str,
                         help="Full pathname of directory containing input spectral element data files (required)",
@@ -63,133 +55,147 @@ def parse_arguments():
                         help="Full path to directory where output regridded data will be placed (required)",
                         required=True)
 
-    parser.add_argument ('--inputres', type=str,
-                         choices=["ne16","ne30"],
-                         help="input_grid name (required)",
-                         required=True)
+    parser.add_argument('--inputres', type=str,
+                        choices=["ne16", "ne30"],
+                        help="input_grid name (required)",
+                        required=True)
 
     parser.add_argument("--workers",
                         type=int,
                         default=1,
-                        help="Number of Dask workers (default: 1, set to >1 for parallel execution)",
-                        )
+                        help="Number of parallel workers (default: 1, set to >1 for parallel execution)")
 
-    # Parse Argument inputs
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    # Error checks
-    return args
 
 #++++++++++++++++++++++++++++++
-# main regridding script
+# Per-file regridding function
+#++++++++++++++++++++++++++++++
+
+def regrid_file(filepath, outputdir, weight_file, realm, debug):
+    """
+    Regrids a single file and writes the output.
+    Designed to be called from a worker process.
+
+    Returns a tuple of (filepath, success, message).
+    """
+    logger = logging.getLogger("noresm_pyregridding")
+
+    filename = Path(filepath).name
+    output_file = outputdir / filename.replace(".nc", "_regridded.nc")
+
+    # Skip if already regridded
+    if output_file.exists():
+        return filepath, True, f"Output file {output_file.name} already exists - skipping"
+
+    try:
+        # Each worker creates its own regridder (weight file read is cheap)
+        regridder = noresm_pyregridding.make_se_regridder(weight_file=weight_file)
+
+        data_in = xr.open_dataset(filepath)
+
+        if "ncol" not in data_in.dims and "lndgrid" not in data_in.dims:
+            return filepath, False, f"Neither ncol nor lndgrid found in {filename}"
+
+        if realm == "atm":
+            data_regridded = noresm_pyregridding.regrid_cam_se_data(regridder, data_in, debug)
+        elif realm == "lnd":
+            data_regridded = noresm_pyregridding.regrid_ctsm_se_data(regridder, data_in, debug)
+
+        data_regridded.to_netcdf(output_file)
+        return filepath, True, f"Successfully regridded and wrote {output_file.name}"
+
+    except Exception as e:
+        return filepath, False, f"Failed to regrid {filename}: {e}"
+
+
+#++++++++++++++++++++++++++++++
+# Main regridding script
 #++++++++++++++++++++++++++++++
 
 def main():
 
-    # Parse command-line arguments
     args = parse_arguments()
-
-    # Save debug state for ease of use
     debug = args.debug
 
     # Set up logging
-    if args.debug:
-        logging.basicConfig(
-            level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-        )
-    else:
-        logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    log_level = logging.DEBUG if debug else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     logger = logging.getLogger("noresm_pyregridding")
-    
-    # Determine input directory
-    inputdir = Path(args.inputdir)
 
-    # Check that inputdir exists
-    if not os.path.exists(inputdir):
+    # Validate input directory
+    inputdir = Path(args.inputdir)
+    if not inputdir.exists():
         raise ValueError(f"inputdir {inputdir} does not exist")
-    
-    # Determine output directories and setup if it does not exist
+
+    # Create output directory if needed
     outputdir = Path(args.outputdir)
-    if not os.path.exists(outputdir):
+    if not outputdir.exists():
         try:
             outputdir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            raise ValueError(f"Could not create output directory {outputdir}, error: {e}")
+            raise ValueError(f"Could not create output directory {outputdir}: {e}")
 
-    # Set up dask if appropriate
-    if args.workers == 1:
-        client = None
-        cluster = None
-    else:
-        ncpus_env = os.getenv("NCPUS")
-        if ncpus_env is not None:
-            ml = 1.0 - float(int(ncpus_env) - 1) / 128.0
-        else:
-            ml = "auto"  # Default memory limit if NCPUS is not set
-        cluster = LocalCluster(
-            n_workers=args.workers, threads_per_worker=1, memory_limit=ml
-        )
-        client = cluster.get_client()
-
-    # Determine weights file to use for regridding (all conservative for now)
-    if (args.inputres == 'ne16'):
+    # Determine weights file
+    if args.inputres == "ne16":
         weight_file = "/datalake/NS9560K/diagnostics/land_xesmf_diag_data/map_ne16pg3_to_1.9x2.5_nomask_scripgrids_c250425.nc"
-    elif (args.inputres == 'ne30'): 
+    elif args.inputres == "ne30":
         weight_file = "/datalake/NS9560K/diagnostics/land_xesmf_diag_data/map_ne30pg3_to_0.5x0.5_nomask_aave_da_c180515.nc"
     else:
-        raise Exception("only input grids of ne16 and ne30 are currently supported")
+        raise ValueError("Only input grids of ne16 and ne30 are currently supported")
 
-    # Create conservative regridder - want to only do this once
-    logger.info(f"Creating conservative regridder")
-    regridder = noresm_pyregridding.make_se_regridder(weight_file=weight_file)
-    logger.info(f"successfully called regridder")
-
-
-    # Determine list of files to regrid
+    # Find files to regrid
     filelist = sorted(f for f in glob.glob(str(inputdir / "*.nc")) if ".cam.i." not in Path(f).name)
-    if len(filelist) < 1:
+    if not filelist:
         logger.error(f"No netcdf files found in {inputdir}")
-        logger.debug(f"filelist is {filelist}")
+        return
+
+    logger.info(f"Found {len(filelist)} netcdf file(s) to process")
+    logger.info(f"Using {args.workers} worker(s)")
+
+    # --- Sequential execution ---
+    if args.workers == 1:
         for filepath in filelist:
-            filename = filepath.split("/")[-1]
-            logger.info(f" filename is {filename}") 
+            _, success, message = regrid_file(filepath, outputdir, weight_file, args.realm, debug)
+            if success:
+                logger.info(message)
+            else:
+                logger.error(message)
 
-    # Loop over files in inut directory
-    for filepath in filelist:
-        # Find filename and output filename and check if file has already been regridded
-        filename = filepath.split("/")[-1]
+    # --- Parallel execution ---
+    else:
+        n_success = 0
+        n_failed = 0
+        n_skipped = 0
 
-        # Determine output file
-        output_file = filename.replace(".nc", "_regridded.nc")
-        outfile_exists = os.path.exists(os.path.join(outputdir,output_file))
-        if outfile_exists:
-            logger.info(f"Output file {output_file} already exists - skipping regridding for input {filepath}")
-            continue
+        with ProcessPoolExecutor(max_workers=args.workers) as executor:
+            futures = {
+                executor.submit(regrid_file, fp, outputdir, weight_file, args.realm, debug): fp
+                for fp in filelist
+            }
+            for future in as_completed(futures):
+                filepath, success, message = future.result()
+                if success:
+                    if "skipping" in message:
+                        n_skipped += 1
+                        logger.info(message)
+                    else:
+                        n_success += 1
+                        logger.info(message)
+                else:
+                    n_failed += 1
+                    logger.error(message)
 
-        # Regrid file
-        logger.info(f"Regridding file {filepath}")
-        data_in = xr.open_dataset(filepath)
+        logger.info(
+            f"Finished: {n_success} regridded, {n_skipped} skipped, {n_failed} failed "
+            f"(out of {len(filelist)} total)"
+        )
+        if n_failed > 0:
+            sys.exit(1)
 
-        if not "ncol" in data_in.dims and not "lndgrid" in data_in.dims:
-            raise ValueError("Neither ncol or lndgrid are on input data")
-
-        if args.realm == 'atm':
-            data_regridded = noresm_pyregridding.regrid_cam_se_data(regridder, data_in, debug)
-        elif args.realm == 'lnd':
-            data_regridded = noresm_pyregridding.regrid_ctsm_se_data(regridder, data_in, debug)
-        logger.info(f"Successfully regridded file {filename}")
-
-        # Write  out regridded file
-        output_file = os.path.join(outputdir,output_file)
-        data_regridded.to_netcdf(output_file)
-        logger.info(f"Wrote regridded file {output_file}")
-    
-    if client:
-        client.close()
-    if cluster:
-        cluster.close()
 
 if __name__ == "__main__":
     main()
