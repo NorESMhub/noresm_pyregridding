@@ -148,7 +148,7 @@ def main():
 
 
     # Determine list of files to regrid
-    filelist = glob.glob(f"{inputdir}/*.nc")
+    filelist = sorted(f for f in glob.glob(str(inputdir / "*.nc")) if ".cam.i." not in Path(f).name)
     if len(filelist) < 1:
         logger.error(f"No netcdf files found in {inputdir}")
         logger.debug(f"filelist is {filelist}")
