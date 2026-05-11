@@ -4,42 +4,6 @@ import math
 import xesmf
 
 
-def make_regridder_regular_to_coarsest_resolution(regrid_target1, regrid_target2):
-    if (regrid_target2.lat.shape[0] == regrid_target1.lat.shape[0]) and (
-        regrid_target2.lon.shape[0] == regrid_target1.lon.shape[0]
-    ):
-        return None, False
-    if regrid_target1.lat.shape[0] > regrid_target2.lat.shape[0]:
-        regridder_here = make_regular_grid_regridder(regrid_target1, regrid_target2)
-        return regridder_here, True
-    regridder_here = make_regular_grid_regridder(regrid_target2, regrid_target1)
-    return regridder_here, False
-
-
-def make_regular_grid_regridder(regrid_start, regrid_target, method="bilinear"):
-    lat_min = np.argmin(
-        np.abs((regrid_target["lat"].values - regrid_start["lat"].values.min()))
-    )
-    lat_max = np.argmin(
-        np.abs(regrid_target["lat"].values - regrid_start["lat"].values.max())
-    )
-    regrid_target = regrid_target.isel(lat=slice(lat_min, lat_max))
-    return xesmf.Regridder(
-        regrid_start,
-        regrid_target,
-        method=method,
-        periodic=True,
-    )
-
-
-def make_generic_regridder(weightfile, filename_exmp):
-    exmp_dataset = xr.open_dataset(filename_exmp)
-    if "lon" in exmp_dataset.dims and "lat" in exmp_dataset.dims:
-        return None
-    else:
-        return make_se_regridder(weight_file=weightfile)
-
-
 def make_se_regridder(weight_file, regrid_method="conserved"):
     weights = xr.open_dataset(weight_file)
     in_shape = weights.src_grid_dims.load().data
