@@ -82,7 +82,7 @@ def regrid_file(filepath, outputdir, weight_file, realm, debug):
     logger = logging.getLogger("noresm_pyregridding")
 
     filename = Path(filepath).name
-    output_file = outputdir / filename.replace(".nc", "_regridded.nc")
+    output_file = outputdir / filename
 
     # Skip if already regridded
     if output_file.exists():
