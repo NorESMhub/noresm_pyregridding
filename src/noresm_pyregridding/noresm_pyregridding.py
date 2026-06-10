@@ -4,6 +4,51 @@ import math
 import xesmf
 
 
+def _restore_passthrough_and_attrs(
+    ds_out: xr.Dataset, ds_in: xr.Dataset, horiz_dim: str
+) -> xr.Dataset:
+    """Restore variables, coords and attrs that xESMF drops during regridding.
+
+    xESMF's ``Regridder.__call__`` only emits the variables that have the
+    horizontal regridding dims; everything else (``time_bnds``, ``hyam``,
+    ``hybm``, ``hyai``, ``hybi``, ``P0``, ``lev``, ``ilev``, ``gw``, scalar
+    reference values, etc.) is silently dropped from the output dataset.
+    In older xESMF versions the per-variable ``attrs`` and the global
+    dataset ``attrs`` are also lost.
+
+    This helper copies them back from the input dataset:
+
+    * for every variable in ``ds_in`` that is **not** present in ``ds_out``
+      and does not depend on ``horiz_dim``, the variable is added back
+      verbatim (with its attrs and encoding);
+    * for every variable that is already in ``ds_out`` (i.e., was
+      regridded), per-variable ``attrs`` and ``encoding`` are restored
+      from ``ds_in`` if the regridder produced an empty set;
+    * the dataset-level ``attrs`` are copied back from ``ds_in``.
+    """
+    # Restore global (dataset-level) attrs
+    ds_out.attrs = dict(ds_in.attrs)
+
+    # Restore per-variable attrs/encoding on regridded variables
+    for name in ds_out.variables:
+        if name in ds_in.variables:
+            if not ds_out[name].attrs:
+                ds_out[name].attrs = dict(ds_in[name].attrs)
+            if not ds_out[name].encoding:
+                ds_out[name].encoding = dict(ds_in[name].encoding)
+
+    # Add back any pass-through variables that don't carry the horiz dim
+    for name in ds_in.variables:
+        if name in ds_out.variables:
+            continue
+        if horiz_dim in ds_in[name].dims:
+            # had the horiz dim but didn't survive regridding — skip
+            continue
+        ds_out[name] = ds_in[name]
+
+    return ds_out
+
+
 def make_se_regridder(weight_file, regrid_method="conserved"):
     weights = xr.open_dataset(weight_file)
     in_shape = weights.src_grid_dims.load().data
@@ -83,30 +128,38 @@ def regrid_ctsm_se_data(
     exclude_normalization_vars = ["landfrac", "landmask"]
 
     # normalize input vars by landfrac and also multiply FATES specific variable by FATES_FRACTION
+    # Wrap the arithmetic in keep_attrs=True so that variable units (and other attrs)
+    # survive the landfrac / FATES_FRACTION multiplication.
     landfrac = ds_in["landfrac"].fillna(0)
-    for var in vars_to_regrid:
-        if debug:
-            print(f"var is {var}")
-        ds_in_copy[var] = (
-            ds_in_copy[var].transpose(..., dimname).expand_dims("dummy", axis=-2)
-        )
-        if var not in exclude_normalization_vars:
-            print(f"var is {var}")
+    with xr.set_options(keep_attrs=True):
+        for var in vars_to_regrid:
+            if debug:
+                print(f"var is {var}")
+            ds_in_copy[var] = (
+                ds_in_copy[var].transpose(..., dimname).expand_dims("dummy", axis=-2)
+            )
+            if var not in exclude_normalization_vars:
+                print(f"var is {var}")
 
-            # multiply variable by landfrac
-            ds_in_copy[var] = ds_in_copy[var] * ds_in_copy["landfrac"]
+                # multiply variable by landfrac
+                ds_in_copy[var] = ds_in_copy[var] * ds_in_copy["landfrac"]
 
-            # if variable is a FATES variable, multiply  by FATES_FRACTION
-            if var.startswith("FATES") and var != "FATES_FRACTION":
-                ds_in_copy[var] = ds_in_copy[var] * ds_in_copy["FATES_FRACTION"]
+                # if variable is a FATES variable, multiply  by FATES_FRACTION
+                if var.startswith("FATES") and var != "FATES_FRACTION":
+                    ds_in_copy[var] = ds_in_copy[var] * ds_in_copy["FATES_FRACTION"]
 
-    # regrid data
-    ds_out = regridder(ds_in_copy.rename({"dummy": "lat", dimname: "lon"}))
+        # regrid data
+        ds_out = regridder(ds_in_copy.rename({"dummy": "lat", dimname: "lon"}))
 
-    # normalize the mapped land data by dividing by the mapped land fraction
-    for var in vars_to_regrid:
-        if var not in exclude_normalization_vars:
-            ds_out[var] = ds_out[var] / ds_out["landfrac"]
+        # normalize the mapped land data by dividing by the mapped land fraction
+        for var in vars_to_regrid:
+            if var not in exclude_normalization_vars:
+                ds_out[var] = ds_out[var] / ds_out["landfrac"]
+
+    # Restore pass-through variables (time_bnds, vertical coords, etc.) and any
+    # per-variable / global attrs dropped by xESMF.  Use the original horizontal
+    # dim name from ds_in (lndgrid), not the renamed one used during regridding.
+    ds_out = _restore_passthrough_and_attrs(ds_out, ds_in, horiz_dim=dimname)
 
     # return regridded dataset
     return ds_out
@@ -128,15 +181,23 @@ def regrid_cam_se_data(
     # determine variables that will be regridded
     vars_to_regrid = [name for name in ds_in.data_vars if dimname in ds_in[name].dims]
 
-    for var in vars_to_regrid:
-        if debug:
-            print(f"var is {var}")
-        ds_in_copy[var] = (
-            ds_in_copy[var].transpose(..., dimname).expand_dims("dummy", axis=-2)
-        )
+    # Wrap reshape + regrid in keep_attrs=True so variable units (and other attrs)
+    # are preserved through .expand_dims/.transpose and into the regridder call.
+    with xr.set_options(keep_attrs=True):
+        for var in vars_to_regrid:
+            if debug:
+                print(f"var is {var}")
+            ds_in_copy[var] = (
+                ds_in_copy[var].transpose(..., dimname).expand_dims("dummy", axis=-2)
+            )
 
-    # regrid all the variables
-    ds_out = regridder(ds_in_copy.rename({"dummy": "lat", dimname: "lon"}))
+        # regrid all the variables
+        ds_out = regridder(ds_in_copy.rename({"dummy": "lat", dimname: "lon"}))
+
+    # Restore pass-through variables (time_bnds, hyam/hybm/hyai/hybi/P0, lev/ilev,
+    # gw, scalar reference values, etc.) and any per-variable / global attrs
+    # dropped by xESMF.  Use the original horizontal dim name from ds_in (ncol).
+    ds_out = _restore_passthrough_and_attrs(ds_out, ds_in, horiz_dim=dimname)
 
     # return regridded dataset
     return ds_out
