@@ -82,7 +82,14 @@ def regrid_file(filepath, outputdir, weight_file, realm, debug):
     logger = logging.getLogger("noresm_pyregridding")
 
     filename = Path(filepath).name
-    output_file = outputdir / filename.replace(".nc", "_regridded.nc")
+    output_file = outputdir / filename
+
+    # Refuse to silently overwrite the input file (would happen if outputdir == inputdir)
+    if output_file.resolve() == Path(filepath).resolve():
+        return filepath, False, (
+            f"Output file would overwrite input file {filename}; "
+            "choose an outputdir different from the inputdir"
+        )
 
     # Skip if already regridded
     if output_file.exists():
@@ -102,7 +109,21 @@ def regrid_file(filepath, outputdir, weight_file, realm, debug):
         elif realm == "lnd":
             data_regridded = noresm_pyregridding.regrid_ctsm_se_data(regridder, data_in, debug)
 
-        data_regridded.to_netcdf(output_file)
+        # Preserve the set of unlimited dimensions from the input file (e.g. "time").
+        # xarray.to_netcdf() writes every dim as fixed by default; pass them
+        # explicitly so the output file retains the same unlimited dim(s) as
+        # the input.  Filter to dims that actually exist in the regridded
+        # dataset (the horizontal dim was renamed during regridding so it
+        # would no longer match by name).
+        src_unlimited = list(data_in.encoding.get("unlimited_dims", []))
+        unlimited_dims = [d for d in src_unlimited if d in data_regridded.dims]
+        if not unlimited_dims and "time" in data_regridded.dims:
+            # Fallback for older xarray versions / engines that don't populate
+            # encoding: NoreSM history files always have time as the
+            # unlimited dim.
+            unlimited_dims = ["time"]
+
+        data_regridded.to_netcdf(output_file, unlimited_dims=unlimited_dims)
         return filepath, True, f"Successfully regridded and wrote {output_file.name}"
 
     except Exception as e:
