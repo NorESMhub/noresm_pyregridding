@@ -162,9 +162,9 @@ def main():
 
     # Determine weights file
     if args.inputres == "ne16":
-        weight_file = "/datalake/NS9560K/diagnostics/land_xesmf_diag_data/map_ne16pg3_to_1.9x2.5_nomask_scripgrids_c250425.nc"
+        weight_file = "/nird/datalake/NS9560K/diagnostics/land_xesmf_diag_data/map_ne16pg3_to_1.9x2.5_nomask_scripgrids_c250425.nc"
     elif args.inputres == "ne30":
-        weight_file = "/datalake/NS9560K/diagnostics/land_xesmf_diag_data/map_ne30pg3_to_0.5x0.5_nomask_aave_da_c180515.nc"
+        weight_file = "/nird/datalake/NS9560K/diagnostics/land_xesmf_diag_data/map_ne30pg3_to_0.5x0.5_nomask_aave_da_c180515.nc"
     else:
         raise ValueError("Only input grids of ne16 and ne30 are currently supported")
 
